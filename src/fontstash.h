@@ -432,7 +432,7 @@ static void fons__tt_renderGlyphBitmap(void *usrdata, FONScolor *output, int out
 
 		for (int y = 0; y < h; y++)
 		{
-			unsigned char* outRow = ((unsigned char*)output) + (outStride*y);
+			unsigned char* outRow = ((unsigned char*)output) + (outStride*sizeof(FONScolor)*y);
 			unsigned char* inRow = sdfData + (w*y);
 			memcpy(outRow, inRow, w);
 		}
@@ -1113,6 +1113,12 @@ int fonsAddFontMem(FONScontext* stash, const char* name, unsigned char* data, in
 	sdfSettings.sdfEnabled = 0;
 
 	return fonsAddFontMemWithEngine(stash, name, data, dataSize, freeData, fons__tt_getEngine(), sdfSettings);
+}
+
+
+int fonsAddFontSdfMem(FONScontext* s, const char* name, unsigned char* data, int ndata, int freeData, FONSsdfSettings sdfSettings)
+{
+	return fonsAddFontMemWithEngine(s, name, data, ndata, freeData, fons__tt_getEngine(), sdfSettings);
 }
 
 
