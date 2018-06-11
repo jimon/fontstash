@@ -118,10 +118,10 @@ struct FONSsdfSettings
 	unsigned char onedgeValue; // value 0-255 to test the SDF against to reconstruct the character (i.e. the isocontour of the character)
 
 	int padding;               // extra "pixels" around the character which are filled with the distance to the character (not 0),
-                               // which allows effects like bit outlines
+							   // which allows effects like bit outlines
 
 	float pixelDistScale;      // what value the SDF should increase by when moving one SDF "pixel" away from the edge (on the 0..255 scale)
-                               // if positive, > onedge_value is inside; if negative, < onedge_value is inside
+							   // if positive, > onedge_value is inside; if negative, < onedge_value is inside
 };
 typedef struct FONSsdfSettings FONSsdfSettings;
 
@@ -134,8 +134,8 @@ struct FONSfontEngine {
 	void  (*getFontVMetrics)(void *usrdata, int *ascent, int *descent, int *lineGap);
 	float (*getPixelHeightScale)(void *usrdata, float size);
 	int   (*getGlyphIndex)(void *usrdata, int codepoint);
-	int   (*buildGlyphBitmap)(void *usrdata, int glyph, float size, float scale, int *advance, int *lsb, int *x0, int *y0, int *x1, int *y1);
-	void  (*renderGlyphBitmap)(void *usrdata, FONScolor *output, int outWidth, int outHeight, int outStride, float scaleX, float scaleY, int glyph);
+	int   (*buildGlyphBitmap)(void *usrdata, int glyph, float size, float scale, int *advance, int *lsb, int *x0, int *y0, int *x1, int *y1, const FONSsdfSettings *sdfSettings);
+	void  (*renderGlyphBitmap)(void *usrdata, FONScolor *output, int outWidth, int outHeight, int outStride, float scaleX, float scaleY, int glyph, const FONSsdfSettings *sdfSettings);
 	int   (*getGlyphKernAdvance)(void *usrdata, int glyph1, int glyph2);
 };
 typedef struct FONSfontEngine FONSfontEngine;
@@ -147,7 +147,7 @@ FONS_DEF void fonsDeleteInternal(FONScontext* s);
 FONS_DEF void fonsSetErrorCallback(FONScontext* s, void (*callback)(void* uptr, int error, int val), void* uptr);
 // Returns current atlas size.
 FONS_DEF void fonsGetAtlasSize(FONScontext* s, int* width, int* height);
-// Expands the atlas size. 
+// Expands the atlas size.
 FONS_DEF int fonsExpandAtlas(FONScontext* s, int width, int height);
 // Resets the whole stash.
 FONS_DEF int fonsResetAtlas(FONScontext* stash, int width, int height);
@@ -155,10 +155,10 @@ FONS_DEF int fonsResetAtlas(FONScontext* stash, int width, int height);
 // Add fonts
 #if FONS_OPTIONS_FILE_IO
 FONS_DEF int fonsAddFont(FONScontext* s, const char* name, const char* path);
-FONS_DEF int fonsAddFontWithEngine(FONScontext* s, const char* name, const char* path, FONSfontEngine* engine);
+FONS_DEF int fonsAddFontWithEngine(FONScontext* s, const char* name, const char* path, FONSfontEngine* engine, FONSsdfSettings sdfSettings);
 #endif
 FONS_DEF int fonsAddFontMem(FONScontext* s, const char* name, unsigned char* data, int ndata, int freeData);
-FONS_DEF int fonsAddFontMemWithEngine(FONScontext* s, const char* name, unsigned char* data, int ndata, int freeData, FONSfontEngine* engine);
+FONS_DEF int fonsAddFontMemWithEngine(FONScontext* s, const char* name, unsigned char* data, int ndata, int freeData, FONSfontEngine* engine, FONSsdfSettings sdfSettings);
 
 #ifndef FONS_USE_FREETYPE
 FONS_DEF int fonsAddFontSdf(FONScontext* s, const char* name, const char* path, FONSsdfSettings sdfSettings);
@@ -206,6 +206,7 @@ FONS_DEF void fonsDrawDebug(FONScontext* s, float x, float y);
 
 #endif // FONS_H
 
+#define FONTSTASH_IMPLEMENTATION
 
 #ifdef FONTSTASH_IMPLEMENTATION
 
@@ -438,7 +439,7 @@ static void fons__tt_renderGlyphBitmap(void *usrdata, FONScolor *output, int out
 		if (sdfData)
 		  stbtt_FreeSDF(sdfData, NULL);
 	}
-	
+
 	// for rgba, do Alpha -> RGBA conversion in-place
 	#if FONS_OPTIONS_RGBA_COLORS
 		for(int y = outHeight - 1; y >= 0; y--)
@@ -1115,7 +1116,7 @@ int fonsAddFontMem(FONScontext* stash, const char* name, unsigned char* data, in
 }
 
 
-int fonsAddFontMemWithEngine(FONScontext* stash, const char* name, unsigned char* data, int dataSize, int freeData, FONSfontEngine* engine)
+int fonsAddFontMemWithEngine(FONScontext* stash, const char* name, unsigned char* data, int dataSize, int freeData, FONSfontEngine* engine, FONSsdfSettings sdfSettings)
 {
 	int i, ascent, descent, fh, lineGap;
 	FONSfont* font = NULL;
@@ -1298,7 +1299,7 @@ static FONSglyph* fons__getGlyph(FONScontext* stash, FONSfont* font, unsigned in
 		// In that case the glyph index 'g' is 0, and we'll proceed below and cache empty glyph.
 	}
 	scale = renderFont->e->getPixelHeightScale(renderFont->edata, size);
-	fons__tt_buildGlyphBitmap(&renderFont->font, g, size, scale, &advance, &lsb, &x0, &y0, &x1, &y1, &renderFont->sdfSettings);
+	renderFont->e->buildGlyphBitmap(renderFont->edata, g, size, scale, &advance, &lsb, &x0, &y0, &x1, &y1, &renderFont->sdfSettings);
 	gw = x1-x0 + pad*2;
 	gh = y1-y0 + pad*2;
 
@@ -1332,7 +1333,7 @@ static FONSglyph* fons__getGlyph(FONScontext* stash, FONSfont* font, unsigned in
 
 	// Rasterize
 	dst = &stash->texData[(glyph->x0+pad) + (glyph->y0+pad) * stash->params.width];
-	fons__tt_renderGlyphBitmap(&renderFont->font, dst, gw-pad*2,gh-pad*2, stash->params.width, scale,scale, g, &renderFont->sdfSettings);
+	renderFont->e->renderGlyphBitmap(renderFont->edata, dst, gw-pad*2,gh-pad*2, stash->params.width, scale,scale, g, &renderFont->sdfSettings);
 
 	// Make sure there is one pixel empty border.
 	dst = &stash->texData[glyph->x0 + glyph->y0 * stash->params.width];
@@ -1664,7 +1665,7 @@ FONS_DEF void fonsDrawDebug(FONScontext* stash, float x, float y)
 }
 
 FONS_DEF float fonsTextBounds(FONScontext* stash,
-					 float x, float y, 
+					 float x, float y,
 					 const char* str, const char* end,
 					 float* bounds)
 {
